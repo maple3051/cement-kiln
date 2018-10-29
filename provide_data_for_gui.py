@@ -4,45 +4,64 @@ import config as con
 import xlrd
 import xlwt
 from xlutils.copy import copy
+from openpyxl import Workbook
+
+
+def Build_table(head, path):
+    # 在内存中创建一个workbook对象，并且至少创建一个worksheet
+    wb = Workbook()
+
+    ws = wb.active  # 获取当前活跃的worksheet，默认是第一个sheet
+
+    for i in range(1, len(head) + 1):
+        ws.cell(1, i).value = head[i - 1]
+
+    wb.save(filename=path)
+
 
 def get_time_now():
     time_now = datetime.datetime.now().strftime('%Y%m%d%H')
     return time_now
 
 
-def Connect():      # 连接数据库
+def Connect():  # 连接数据库
     db = connect(host='localhost', user="root", password=con.password, db="Program", charset="utf8")
     cursor = db.cursor()
-    return cursor
+    return db, cursor
 
 
-def get_by_hour(time):      # 具体一个小时的数据
+def get_by_hour(time):  # 具体一个小时的数据
     '''
     :param time: 传入数据为字符串形式 'date + hour'
     :return:
     '''
-    cursor = Connect()
+    db, cursor = Connect()
     date = time[:8]
     hour = int(time[8:])
     sql = "SELECT * FROM all_data WHERE date = '%s' and time = '%s'" % (date, hour)
     cursor.execute(sql)
     result = cursor.fetchall()[0]
     result = result[1:]
+    state = result[-1]     # 取现在的状态看是否已经是删除的数据
+    if state == 0:
+        return False
+    result = result[:-1]   # 去掉末尾
     name = []
     for x in cursor.description[1:]:
         name.append(x[0])
+    name = name[:-1]
     # print(name)
     # print(result)
     return name, result
 
 
-def get_by_day(time):       # 数据库中有ID栏
+def get_by_day(time):  # 数据库中有ID栏
     '''
     :param time:'date'
     :return:
     '''
-    cursor = Connect()
-    sql = "SELECT * FROM all_data WHERE date = '%s'" % (time)
+    db, cursor = Connect()
+    sql = "SELECT * FROM all_data WHERE date = '%s' and state = 1" % (time)
     cursor.execute(sql)
     data = cursor.fetchall()
     result = []
@@ -51,20 +70,23 @@ def get_by_day(time):       # 数据库中有ID栏
     name = []
     for x in cursor.description[1:]:
         name.append(x[0])
+    name = name[:-1]
     result = list(map(list, zip(*result)))
-    return name, result[2:]
+    result = result[2:]
+    result = result[:-1]
+    return name, result
 
 
-def get_by_fragment_(time_now, number = 72):
+def get_by_fragment_(time_now, number=72):
     '''
     :param time_now: 'date + hour'
             number : fragment的长度
     :return:
     '''
-    cursor = Connect()
+    db, cursor = Connect()
     date = time_now[:8]
     hour = int(time_now[8:]) - 1
-    sql = "SELECT * FROM all_data WHERE date = '%s' and time = '%s'" % (date, hour)
+    sql = "SELECT * FROM all_data WHERE date = '%s' and time = '%s' and state = 1" % (date, hour)
     result = []
     if cursor.execute(sql):
         name = []
@@ -73,17 +95,17 @@ def get_by_fragment_(time_now, number = 72):
         data_now = cursor.fetchall()[0]
         id = data_now[0]
         # print(id)
-        result.append(data_now[1:])     # 添加第一个元素给result
+        result.append(data_now[1:])  # 添加第一个元素给result
         i = 1
-    else:
-        sql = "SELECT ID FROM all_data"
+    else:       #若不能
+        sql = "SELECT ID FROM all_data where state = 1"
         cursor.execute(sql)
         id = cursor.fetchall()[-1][0]
         i = 0
         name = get_table_name()
         print(id)
     while i != number - 1 and id - i != 0:
-        sql = "SELECT * FROM all_data WHERE ID = '%d'" % (id - i)
+        sql = "SELECT * FROM all_data WHERE ID = '%d' and state = 1" % (id - i)
         cursor.execute(sql)
         result.append(cursor.fetchall()[0][1:])
         # print(result)
@@ -108,8 +130,7 @@ def get_by_fragment():
 
 
 def update_data(data):
-    db = connect(host='localhost', user="root", password=con.password, db="Program", charset="utf8")
-    cursor = db.cursor()
+    db, cursor = Connect()
     try:
         for x in data:
             date = x[0]
@@ -126,26 +147,32 @@ def update_data(data):
         print(msg)
         return False
 
+
 def delete_data(data):
-    db = connect(host='localhost', user="root", password=con.password, db="Program", charset="utf8")
-    cursor = db.cursor()
+    db, cursor = Connect()
     try:
         for x in data:
             date = x[0]
             hour = x[1]
-            sql = "delete from all_data where date=%s and time=%s" % (date, hour)
+            sql = "UPDATE all_data SET state = 0 where date=%s and time=%s" % (date, hour)
             cursor.execute(sql)
             db.commit()
+
         return True
     except Exception as msg:
         print(msg)
         return False
 
 
+def recover_data(date):
+    '''
+    :param date: 提供需要恢复的数据的日期和时间信息:date+hour
+    :return: True or False
+    '''
+
 
 def save_data(data):
-    db = connect(host='localhost', user="root", password=con.password, db="Program", charset="utf8")
-    cursor = db.cursor()
+    db, cursor = Connect()
     try:
         sql1 = "SELECT * FROM all_data WHERE ID = 1"
         cursor.execute(sql1)
@@ -171,8 +198,8 @@ def save_data(data):
             for j in range(2, len(data[0])):
                 if data[i][j] == None or data[i][j] == '':
                     data[i][j] = 0
-                sql = "UPDATE all_data SET %s = '%lf' WHERE date = '%s' and time = '%s' and ID = '%d'"\
-                        % (Name[j], data[i][j], data[i][0], data[i][1], last_id)
+                sql = "UPDATE all_data SET %s = '%lf' WHERE date = '%s' and time = '%s' and ID = '%d'" \
+                      % (Name[j], data[i][j], data[i][0], data[i][1], last_id)
                 cursor.execute(sql)
                 db.commit()
             '''
@@ -187,17 +214,17 @@ def save_data(data):
 
 
 def get_table_name():
-    cursor = Connect()
+    db, cursor = Connect()
     sql = "SELECT * FROM all_data WHERE ID = 1"
     cursor.execute(sql)
     result = cursor.description
     name = [x[0] for x in result]
     # print(name[1:])
-    return name[1:]
+    return name[1:-1]
 
 
 def get_all_date():
-    cursor = Connect()
+    db, cursor = Connect()
     sql = "SELECT date, time FROM all_data"
     cursor.execute(sql)
     result = cursor.fetchall()
@@ -205,7 +232,7 @@ def get_all_date():
 
 
 def get_target_data(time):
-    cursor = Connect()
+    db, cursor = Connect()
     date = time[:8]
     hour = time[8:]
     sql = "SELECT * FROM target_data WHERE date = '%s' and time = '%s'" % (date, hour)
@@ -215,6 +242,7 @@ def get_target_data(time):
         result = cursor.fetchall()[0][1:]
         return name, result
     else:
+        print("There is no data")
         return False
 
 
@@ -226,7 +254,7 @@ def reshape_data(source_filename, target_filename='file_model\\raw_model.xlsx'):
     '''
     source_readfile = xlrd.open_workbook(source_filename)
     sourcesheet = source_readfile.sheet_by_index(0)
-    source_table_name = sourcesheet.row_values(0, 0)        # 获取用户文件的表头
+    source_table_name = sourcesheet.row_values(0, 0)  # 获取用户文件的表头
 
     standard_file = xlrd.open_workbook(target_filename)
     standardsheet = standard_file.sheet_by_name('Sheet1')
@@ -251,7 +279,7 @@ def reshape_data(source_filename, target_filename='file_model\\raw_model.xlsx'):
         newsheet.write(0, i, standard_table_name[i])
     for i in range(len(standard_table_name)):
         for j in range(len(new_table_value[i])):
-            newsheet.write(j+1, i, new_table_value[i][j])
+            newsheet.write(j + 1, i, new_table_value[i][j])
 
     length = len('model\\model')
     new_filename = 'data' + target_filename[length:]
@@ -282,7 +310,60 @@ def change_data_model(Username, name):
         return False
 
 
+def Read_file(path):  # 读取文件名，返回文件的所有数据
+    readfile = xlrd.open_workbook(path)
+    value = []
+    read_sheet = readfile.sheet_by_name('Sheet1')
+    table_name = read_sheet.row_values(0, 0)
+    for i in range(len(table_name)):
+        x = read_sheet.col_values(i, 1)
+        value.append(x)
+    return table_name, value
+
+
+def operation_record(data):
+    try:
+        db, cursor = Connect()
+        time_now = datetime.datetime.now().strftime('%Y%m%d-%H:%M:%S')
+        # print(time_now)
+        sql = "INSERT INTO operation_record(time, username, operation) VALUE('%s', '%s', '%s')" \
+              % (time_now, data[0], data[1])
+        print('laalalala')
+        cursor.execute(sql)
+        db.commit()
+        return True
+    except Exception as msg:
+        print('Operation_record_error:'+msg)
+        return False
+
+
+def Data_Output_from_Database():        #  从数据库中导出数据
+    try:
+        db, cursor = Connect()
+        sql = "SELECT * FROM all_data WHERE state = 1"
+        cursor.execute(sql)
+        new_file = xlwt.Workbook()
+        newsheet = new_file.add_sheet('Sheet1')
+        time = datetime.datetime.now().strftime('%Y%m%d%H%M')
+        new_file.save('E:\\Data_Output\\all_data-' + time + '.xls')
+        record = cursor.fetchall()
+        table_name = get_table_name()
+        for i in range(len(table_name)):
+            newsheet.write(0, i, table_name[i])     #  写入表头
+        for i in range(len(record)):
+            for j in range(len(record[i])-2):   # 此处-2是不记录state和id
+                newsheet.write(i+1, j, record[i][j+1])       # 因为是从第二行开始录入数据，所以i+1
+        # print(time)
+        new_file.save('E:\\Data_Output\\all_data-'+time+'.xls')
+        return True
+    except Exception as msg:
+        print(msg)
+        return False
+
+
 if __name__ == "__main__":
+    Data_Output_from_Database()
+    '''
     old_table_name = get_table_name()
     old_table_name.append('zhu')
     model_name = change_data_model('moujun', old_table_name)
@@ -292,7 +373,7 @@ if __name__ == "__main__":
     # get_table_name()
     # print(get_time_now())
     # get_by_fragment()
-    '''
+    
     name1, data1 = get_by_hour('2017031507')
     name2, data2 = get_by_hour('2017031508')
     data1 = list(data1)
